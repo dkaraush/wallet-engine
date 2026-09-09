@@ -225,6 +225,37 @@ pub(crate) fn prepare_internal_signed_transfer(
     })
 }
 
+/// Builds both supported delivery forms from one account snapshot and expiry.
+pub(crate) fn prepare_transfer_pair(
+    mnemonic_bytes: &[u8],
+    record_id: &NonEmptyString,
+    source: &TonAddressString,
+    network: Network,
+    request: &SendRequest,
+    account: &FreshSendAccount,
+    valid_until: u64,
+) -> Result<(PreparedTransfer, PreparedTransfer), TransferError> {
+    let external = prepare_transfer(
+        mnemonic_bytes,
+        record_id,
+        source,
+        network,
+        request,
+        account,
+        valid_until,
+    )?;
+    let internal = prepare_internal_signed_transfer(
+        mnemonic_bytes,
+        record_id,
+        source,
+        network,
+        request,
+        account,
+        valid_until,
+    )?;
+    Ok((external, internal))
+}
+
 /// Builds a complete wallet transfer with a placeholder signature.
 ///
 /// Toncenter validates the message body and actions with `ignore_chksig=true`.
@@ -709,6 +740,56 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, vec![1, 2]);
+    }
+
+    #[test]
+    fn transfer_pair_uses_one_seqno_and_expiration_for_both_delivery_forms() {
+        let source = derive_source(PRE_ROTATION_MNEMONIC.as_bytes(), Network::Testnet)
+            .expect("fixture mnemonic derives a wallet");
+        let source = TonAddressString::from_address(&source, Network::Testnet);
+        let request = single_message_request("paired-transfer");
+        let account = FreshSendAccount {
+            status: crate::AccountStatus::Active,
+            seqno: 7,
+        };
+        let valid_until = 1_900_000_000;
+
+        let (external, internal) = prepare_transfer_pair(
+            PRE_ROTATION_MNEMONIC.as_bytes(),
+            &NonEmptyString::try_from("record").expect("record id is valid"),
+            &source,
+            Network::Testnet,
+            &request,
+            &account,
+            valid_until,
+        )
+        .expect("both delivery forms build");
+
+        assert_eq!(external.seqno, account.seqno);
+        assert_eq!(internal.seqno, account.seqno);
+        assert_eq!(external.valid_until, valid_until);
+        assert_eq!(internal.valid_until, valid_until);
+        assert_ne!(external.signed_boc, internal.signed_boc);
+
+        let external_message = Msg::<TonCell>::from_boc(external.signed_boc.as_bytes().to_vec())
+            .expect("external BOC decodes");
+        assert!(matches!(external_message.info, CommonMsgInfo::ExtIn(_)));
+        let (external_body, _) =
+            WalletExtMsgBody::read_signed(&mut external_message.body.value.parser())
+                .expect("external signed body decodes");
+
+        let internal_message = Msg::<TonCell>::from_boc(internal.signed_boc.as_bytes().to_vec())
+            .expect("internal BOC decodes");
+        assert!(matches!(internal_message.info, CommonMsgInfo::Int(_)));
+        let (internal_body, _) = ton::ton_wallet::WalletInternalSignedBody::read_signed(
+            &mut internal_message.body.value.parser(),
+        )
+        .expect("internal signed body decodes");
+
+        assert_eq!(external_body.msg_seqno, internal_body.msg_seqno);
+        assert_eq!(external_body.valid_until, internal_body.valid_until);
+        assert_eq!(external_body.msg_seqno, account.seqno);
+        assert_eq!(external_body.valid_until, valid_until as u32);
     }
 
     #[test]

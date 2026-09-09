@@ -133,7 +133,7 @@ revision that you use to build the Rust library.
 
 ### Rust tests
 
-Install a current Acton CLI that supports `acton localnet`.
+Install a current Acton CLI that supports `acton simulated-localnet`.
 
 `cargo nextest run` executes unit and scenario tests in parallel. Localnet
 scenarios start temporary Acton nodes on free loopback ports. The scenarios

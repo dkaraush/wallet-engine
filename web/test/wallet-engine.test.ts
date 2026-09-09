@@ -467,6 +467,29 @@ describe("high-level WASM API", () => {
     )
     clients.push(client)
 
+    const preparedTransfer = await client.prepareTransfer({
+      operationId: "browser-prepared-transfer",
+      intent: {
+        expiration: {kind: "exact", unixTimestamp: 1_900_000_000},
+        messages: [
+          {
+            destination: created.descriptor.address,
+            amount: {kind: "exact", nanograms: "1"},
+            body: {kind: "empty"},
+          },
+        ],
+      },
+    })
+    expect(preparedTransfer).toMatchObject({
+      operationId: "browser-prepared-transfer",
+      seqno: 42,
+      validUntil: 1_900_000_000,
+    })
+    expect(preparedTransfer.externalBoc.length).toBeGreaterThan(16)
+    expect(preparedTransfer.internalBoc.length).toBeGreaterThan(16)
+    expect(preparedTransfer.externalBoc).not.toBe(preparedTransfer.internalBoc)
+    expect(submittedBoc).toBeUndefined()
+
     const rotation = await client.prepareKeyRotation({
       validUntil: 1_900_000_000,
       messageKind: "external",

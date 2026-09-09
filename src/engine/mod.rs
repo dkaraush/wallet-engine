@@ -14,6 +14,7 @@ mod host;
 mod key_rotation;
 mod nft;
 mod nft_transfer;
+mod prepare_transfer;
 mod preview;
 mod provider;
 mod refresh;

@@ -662,7 +662,7 @@ impl Localnet {
         let child = Command::new(&binary)
             .arg("--project-root")
             .arg(directory.path())
-            .arg("localnet")
+            .arg("simulated-localnet")
             .arg("start")
             .arg("--port")
             .arg(port.to_string())

@@ -166,6 +166,18 @@ impl WalletClient {
         to_value(&result)
     }
 
+    /// Signs external and internal delivery forms without submitting either one.
+    #[wasm_bindgen(js_name = prepareTransfer)]
+    pub async fn prepare_transfer(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_value(request)?;
+        let prepared = self
+            .inner
+            .prepare_transfer(request)
+            .await
+            .map_err(|error| engine_error(&error))?;
+        to_value(&prepared)
+    }
+
     /// Durably records and submits an already signed external-message BOC.
     #[wasm_bindgen(js_name = sendBoc)]
     pub async fn send_boc(&self, request: JsValue) -> Result<JsValue, JsValue> {

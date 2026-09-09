@@ -161,6 +161,40 @@ pub struct SendRequest {
     pub intent: SendIntent,
 }
 
+/// Requests both signed delivery forms for one wallet transfer.
+///
+/// The engine resolves one fresh wallet sequence number and one expiration
+/// timestamp, then signs the transfer as both an incoming external message and
+/// an owner-signed internal message. It does not submit or persist either BOC.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareTransferRequest {
+    /// A unique identifier chosen by the application for the prepared transfer.
+    pub operation_id: NonEmptyString,
+    /// The immutable messages and expiration policy covered by both signatures.
+    pub intent: SendIntent,
+}
+
+/// Two signed delivery forms prepared from the same wallet state.
+///
+/// Both BOCs cover the same `seqno` and `valid_until`, so they are alternative
+/// representations of one transfer. The caller must hand off only the delivery
+/// form selected by its server. This result is not written to the send journal.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedTransfer {
+    /// The application operation identifier.
+    pub operation_id: NonEmptyString,
+    /// Complete incoming external message for direct provider submission.
+    pub external_boc: Boc,
+    /// Complete owner-signed internal message for a gas-paying relayer.
+    pub internal_boc: Boc,
+    /// Fresh wallet sequence number covered by both signed messages.
+    pub seqno: u32,
+    /// Unix expiration timestamp covered by both signed messages.
+    pub valid_until: u64,
+}
+
 /// Requests durable submission of an already signed external wallet message.
 ///
 /// `seqno` and `valid_until` must be the exact values covered by `signed_boc`.

@@ -6,6 +6,8 @@ import type {BrowserPlatformHost} from "./platform-host"
 import type {
   NftTransferPreviewRequest,
   NftTransferRequest,
+  PreparedTransfer,
+  PrepareTransferRequest,
   SendPreview,
   SendPreviewRequest,
   SendBocRequest,
@@ -127,6 +129,12 @@ export class WalletClient {
   async send(request: SendRequest): Promise<SendResult> {
     this.assertOpen()
     return (await this.raw.send(request)) as SendResult
+  }
+
+  /** Signs external and internal delivery forms without submitting either one. */
+  async prepareTransfer(request: PrepareTransferRequest): Promise<PreparedTransfer> {
+    this.assertOpen()
+    return (await this.raw.prepareTransfer(request)) as PreparedTransfer
   }
 
   /** Durably records and submits an already signed external-message BOC. */

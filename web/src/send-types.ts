@@ -105,6 +105,21 @@ export interface SendRequest {
   readonly intent: SendIntent
 }
 
+/** Requests both signed delivery forms without submitting either one. */
+export interface PrepareTransferRequest {
+  readonly operationId: string
+  readonly intent: SendIntent
+}
+
+/** Alternative external and internal BOCs signed with one seqno and expiration. */
+export interface PreparedTransfer {
+  readonly operationId: string
+  readonly externalBoc: string
+  readonly internalBoc: string
+  readonly seqno: number
+  readonly validUntil: number
+}
+
 /** Durably submits one already signed external wallet message. */
 export interface SendBocRequest {
   readonly operationId: string
