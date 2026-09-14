@@ -941,13 +941,16 @@ optional destination `StateInit`. A body is empty, a plaintext comment, or one
 caller-built payload cell.
 
 For an encrypted transfer comment, call `createEncryptedComment` before
-preview. The engine calls `get_public_key` on the recipient wallet, authorizes
+preview. The engine uses the optional 32-byte Ed25519 `recipientPublicKey`, or
+calls `get_public_key` on the recipient wallet when it is omitted or `null`.
+Supplying the key skips that lookup and supports uninitialized wallets. The
+caller must verify that the supplied key corresponds to the recipient address;
+the engine does not verify this association. It authorizes
 the protected sender mnemonic through the platform host, applies the TON
 Ed25519/X25519, HMAC-SHA512, AES-256-CBC, and snake-cell format, and returns a
 complete BOC. Put that BOC in `SendMessageBody.rawPayload`, then preview and
-send the same immutable intent. Plaintext is limited to 960 UTF-8 bytes. A
-recipient without an available on-chain `get_public_key` cannot receive this
-format through this API. See the [TON encrypted-comments
+send the same immutable intent. Plaintext is limited to 960 UTF-8 bytes.
+See the [TON encrypted-comments
 format](https://docs.ton.org/llms/contracts/standard/wallets/interact/content.md#encrypted-comments).
 
 `SendAmount.all` must be the only message in its batch. Wallet V5 applies the

@@ -6,7 +6,7 @@ use crate::wallet::encrypted_comment::{
     encrypt_comment as encrypt_body, validate_encrypted_comment_body,
 };
 use crate::{
-    Boc, CreateEncryptedCommentRequest, DecryptCommentRequest, ProtectedSecretRead,
+    Boc, CreateEncryptedCommentRequest, DecryptCommentRequest, HttpRequest, ProtectedSecretRead,
     WalletClientError,
 };
 
@@ -15,12 +15,18 @@ use super::send_http::{build_public_key_request, parse_public_key};
 use super::send_state::SensitiveBytes;
 use super::state::{OperationFamily, ensure_running};
 
+enum RecipientPublicKeySource {
+    Provided([u8; 32]),
+    OnChain(HttpRequest),
+}
+
 #[uniffi::export]
 impl WalletClient {
     /// Creates a TON encrypted-comment body ready for `SendMessageBody::RawPayload`.
     ///
-    /// The engine calls the recipient wallet's `get_public_key` get-method, then
-    /// asks the platform host to authorize this wallet's protected mnemonic.
+    /// The engine uses the supplied recipient public key or calls the recipient
+    /// wallet's `get_public_key` get-method, then asks the platform host to
+    /// authorize this wallet's protected mnemonic.
     /// No secret is requested when the comment is already too large.
     pub async fn create_encrypted_comment(
         &self,
@@ -31,8 +37,16 @@ impl WalletClient {
                 "the encrypted comment exceeds 960 UTF-8 bytes",
             ));
         }
+        let provided_public_key = request
+            .recipient_public_key
+            .as_deref()
+            .map(<[u8; 32]>::try_from)
+            .transpose()
+            .map_err(|_| {
+                encrypted_comment_error(EncryptedCommentError::InvalidPeerPublicKey.to_string())
+            })?;
 
-        let (generation, config, public_key_request, secret_request) = {
+        let (generation, config, public_key_source, secret_request) = {
             let mut state = self.lock()?;
             ensure_running(&state)?;
             let secret_ref = state
@@ -49,16 +63,19 @@ impl WalletClient {
                 .ok_or(WalletClientError::IdentifierExhausted)?;
             let generation = state.resolution_generation;
             let config = state.config.clone();
-            let public_key_request = build_public_key_request(
-                &config,
-                state.allocate_request_id()?,
-                &request.recipient,
-            )?;
+            let public_key_source = match provided_public_key {
+                Some(key) => RecipientPublicKeySource::Provided(key),
+                None => RecipientPublicKeySource::OnChain(build_public_key_request(
+                    &config,
+                    state.allocate_request_id()?,
+                    &request.recipient,
+                )?),
+            };
             state.active_resolution = Some((generation, Vec::new()));
             (
                 generation,
                 config,
-                public_key_request,
+                public_key_source,
                 ProtectedSecretRead {
                     secret_ref,
                     reason: SecretAccessReason::EncryptComment,
@@ -67,19 +84,22 @@ impl WalletClient {
             )
         };
 
-        let recipient_public_key = match self
-            .execute_tracked_standalone_resolution_request(generation, &public_key_request)
-            .await
-        {
-            Ok(result) => result
-                .and_then(|body| parse_public_key(&body))
-                .map_err(|error| {
-                    self.fail_encrypted_comment(generation, error.developer_message)
-                })?,
-            Err(error) => {
-                self.discard_encrypted_comment_operation(generation);
-                return Err(error);
-            }
+        let recipient_public_key = match public_key_source {
+            RecipientPublicKeySource::Provided(key) => key,
+            RecipientPublicKeySource::OnChain(public_key_request) => match self
+                .execute_tracked_standalone_resolution_request(generation, &public_key_request)
+                .await
+            {
+                Ok(result) => result
+                    .and_then(|body| parse_public_key(&body))
+                    .map_err(|error| {
+                        self.fail_encrypted_comment(generation, error.developer_message)
+                    })?,
+                Err(error) => {
+                    self.discard_encrypted_comment_operation(generation);
+                    return Err(error);
+                }
+            },
         };
 
         let secret = SensitiveBytes::new(
@@ -245,11 +265,16 @@ mod tests {
 
     struct PublicKeyHost {
         public_key: [u8; 32],
+        requests: Mutex<Vec<HttpRequest>>,
     }
 
     #[async_trait::async_trait]
     impl WalletHttpHost for PublicKeyHost {
         async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError> {
+            self.requests
+                .lock()
+                .expect("request lock")
+                .push(request.clone());
             let encoded = self
                 .public_key
                 .iter()
@@ -315,13 +340,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn public_workflow_fetches_the_peer_key_and_authorizes_each_secret_use() {
+    fn client_config() -> WalletClientConfig {
         let wallet = derive_wallet(MNEMONIC, Network::Testnet).expect("wallet derives");
         let source = TonAddressString::from_address(&wallet.address, Network::Testnet);
-        let config = WalletClientConfig {
+        WalletClientConfig {
             record_id: NonEmptyString::try_from("encrypted-comment-test").expect("record ID"),
-            address: source.clone(),
+            address: source,
             public_key: wallet.key_pair.public_key.to_vec(),
             local_secret_ref: Some(ProtectedSecretRef {
                 value: "wallet-secret".to_owned(),
@@ -334,26 +358,31 @@ mod tests {
                 dns_root_address: None,
                 request_timeout_ms: 15_000,
             },
-        };
+        }
+    }
+
+    #[test]
+    fn public_workflow_fetches_the_peer_key_and_authorizes_each_secret_use() {
+        let config = client_config();
+        let source = config.address.clone();
         let recipient_public_key = SigningKey::from_bytes(&[7_u8; 32])
             .verifying_key()
             .to_bytes();
         let platform = Arc::new(SecretHost {
             reasons: Mutex::new(Vec::new()),
         });
-        let client = WalletClient::new(
-            config,
-            Arc::new(PublicKeyHost {
-                public_key: recipient_public_key,
-            }),
-            platform.clone(),
-        )
-        .expect("client builds");
+        let http = Arc::new(PublicKeyHost {
+            public_key: recipient_public_key,
+            requests: Mutex::new(Vec::new()),
+        });
+        let client =
+            WalletClient::new(config, http.clone(), platform.clone()).expect("client builds");
 
         let body = block_on(
             client.create_encrypted_comment(CreateEncryptedCommentRequest {
                 recipient: TonAddressString::try_from(RECIPIENT).expect("recipient"),
                 comment: "secret hello".to_owned(),
+                recipient_public_key: None,
             }),
         )
         .expect("comment encrypts");
@@ -364,12 +393,99 @@ mod tests {
         .expect("outgoing comment decrypts");
 
         assert_eq!(plaintext, "secret hello");
+        assert_eq!(http.requests.lock().expect("request lock").len(), 1);
         assert_eq!(
             *platform.reasons.lock().expect("reason lock"),
             [
                 SecretAccessReason::EncryptComment,
                 SecretAccessReason::DecryptComment,
             ]
+        );
+    }
+
+    #[test]
+    fn supplied_key_skips_http_and_encrypts_for_the_recipient() {
+        const RECIPIENT_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let recipient_wallet =
+            derive_wallet(RECIPIENT_MNEMONIC, Network::Testnet).expect("recipient wallet derives");
+        let recipient = TonAddressString::from_address(&recipient_wallet.address, Network::Testnet);
+        let config = client_config();
+        let source = config.address.clone();
+        let http = Arc::new(PublicKeyHost {
+            public_key: [0; 32],
+            requests: Mutex::new(Vec::new()),
+        });
+        let platform = Arc::new(SecretHost {
+            reasons: Mutex::new(Vec::new()),
+        });
+        let client =
+            WalletClient::new(config, http.clone(), platform.clone()).expect("client builds");
+        let body = block_on(
+            client.create_encrypted_comment(CreateEncryptedCommentRequest {
+                recipient: recipient.clone(),
+                comment: "secret for an undeployed wallet".to_owned(),
+                recipient_public_key: Some(recipient_wallet.key_pair.public_key.to_vec()),
+            }),
+        )
+        .expect("comment encrypts with the supplied key");
+
+        let plaintext = decrypt_body(
+            RECIPIENT_MNEMONIC.as_bytes(),
+            Network::Testnet,
+            &recipient,
+            &source,
+            &body,
+        )
+        .expect("recipient decrypts the comment");
+        assert_eq!(plaintext, "secret for an undeployed wallet");
+        assert!(http.requests.lock().expect("request lock").is_empty());
+        assert_eq!(
+            *platform.reasons.lock().expect("reason lock"),
+            [SecretAccessReason::EncryptComment],
+        );
+        assert!(
+            client
+                .lock()
+                .expect("state lock")
+                .active_resolution
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn supplied_key_with_invalid_length_is_rejected_before_io() {
+        let http = Arc::new(PublicKeyHost {
+            public_key: [0; 32],
+            requests: Mutex::new(Vec::new()),
+        });
+        let platform = Arc::new(SecretHost {
+            reasons: Mutex::new(Vec::new()),
+        });
+        let client = WalletClient::new(client_config(), http.clone(), platform.clone())
+            .expect("client builds");
+
+        for length in [0, 31, 33] {
+            let error = block_on(
+                client.create_encrypted_comment(CreateEncryptedCommentRequest {
+                    recipient: TonAddressString::try_from(RECIPIENT).expect("recipient"),
+                    comment: "secret hello".to_owned(),
+                    recipient_public_key: Some(vec![7; length]),
+                }),
+            )
+            .expect_err("invalid key length must fail");
+            assert!(matches!(
+                error,
+                WalletClientError::EncryptedCommentUnavailable { .. }
+            ));
+        }
+        assert!(http.requests.lock().expect("request lock").is_empty());
+        assert!(platform.reasons.lock().expect("reason lock").is_empty());
+        assert!(
+            client
+                .lock()
+                .expect("state lock")
+                .active_resolution
+                .is_none()
         );
     }
 }

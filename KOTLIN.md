@@ -175,7 +175,11 @@ one transaction produces multiple activity rows, so do not sum it per row.
 ## Encrypted comments
 
 Call `WalletClient.createEncryptedComment` with the recipient and UTF-8 text.
-It loads the recipient's `get_public_key`, requests the protected mnemonic with
+Optionally set `CreateEncryptedCommentRequest.recipientPublicKey` to the
+recipient's 32-byte Ed25519 key to skip the `get_public_key` lookup, including
+for an uninitialized wallet. The caller must verify that this key corresponds
+to the recipient address; the engine does not verify this association. The
+default `null` uses the lookup. The engine requests the protected mnemonic with
 `SecretAccessReason.ENCRYPT_COMMENT`, and returns a BOC. Use that BOC as a
 `SendMessageBody.RawPayload`, then preview and send the same intent.
 

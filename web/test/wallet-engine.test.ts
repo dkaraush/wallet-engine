@@ -572,45 +572,57 @@ describe("high-level WASM API", () => {
     expect(methods).toEqual(["dnsResolve"])
   })
 
-  test("creates and decrypts TON encrypted comments through the WASM boundary", async () => {
-    const secrets = new RecordingSecrets()
-    const encryptedPlatform = new BrowserPlatformHost({
-      secrets,
-      journal: new MemoryJournal(),
-    })
-    const lifecycle = await WalletLifecycle.create(encryptedPlatform)
-    lifecycles.push(lifecycle)
-    const created = await lifecycle.createWallet({
-      recordId: "encrypted-comment-wallet",
-      network: "testnet",
-    })
-    const peerPublicKey = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
-    const client = await WalletClient.create(
-      {
-        ...walletConfig(created.descriptor),
-        localSecretRef: created.descriptor.secretRef,
-      },
-      {
-        platformHost: encryptedPlatform,
-        fetch: mockFetch(async () =>
-          Response.json({result: {stack: [["num", `0x${peerPublicKey}`]]}}),
-        ),
-      },
-    )
-    clients.push(client)
+  test.each(["omitted", "null", "supplied"] as const)(
+    "creates and decrypts TON encrypted comments through the WASM boundary (%s recipient key)",
+    async keySource => {
+      const secrets = new RecordingSecrets()
+      const encryptedPlatform = new BrowserPlatformHost({
+        secrets,
+        journal: new MemoryJournal(),
+      })
+      const lifecycle = await WalletLifecycle.create(encryptedPlatform)
+      lifecycles.push(lifecycle)
+      const created = await lifecycle.createWallet({
+        recordId: "encrypted-comment-wallet",
+        network: "testnet",
+      })
+      const peerPublicKey = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+      let fetchCount = 0
+      const client = await WalletClient.create(
+        {
+          ...walletConfig(created.descriptor),
+          localSecretRef: created.descriptor.secretRef,
+        },
+        {
+          platformHost: encryptedPlatform,
+          fetch: mockFetch(async () => {
+            fetchCount += 1
+            return Response.json({result: {stack: [["num", `0x${peerPublicKey}`]]}})
+          }),
+        },
+      )
+      clients.push(client)
 
-    const body = await client.createEncryptedComment({
-      recipient: `0:${"22".repeat(32)}`,
-      comment: "private hello",
-    })
-    const comment = await client.decryptComment({
-      sender: created.descriptor.address,
-      body,
-    })
+      const body = await client.createEncryptedComment({
+        recipient: `0:${"22".repeat(32)}`,
+        comment: "private hello",
+        ...(keySource === "omitted"
+          ? {}
+          : {
+              recipientPublicKey:
+                keySource === "null" ? null : Array.from(Buffer.from(peerPublicKey, "hex")),
+            }),
+      })
+      const comment = await client.decryptComment({
+        sender: created.descriptor.address,
+        body,
+      })
 
-    expect(comment).toBe("private hello")
-    expect(secrets.reasons).toEqual(["encryptComment", "decryptComment"])
-  })
+      expect(comment).toBe("private hello")
+      expect(fetchCount).toBe(keySource === "supplied" ? 0 : 1)
+      expect(secrets.reasons).toEqual(["encryptComment", "decryptComment"])
+    },
+  )
 })
 
 class RecordingSecrets extends MemorySecrets {

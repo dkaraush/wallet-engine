@@ -278,14 +278,18 @@ Create an encrypted-comment BOC before previewing the transfer:
 const boc = await client.createEncryptedComment({
   recipient: destination,
   comment: "private hello",
+  recipientPublicKey: recipientKeyBytes, // Optional number[] of 32 Ed25519 key bytes.
 })
 
 const body = {kind: "rawPayload" as const, boc}
 ```
 
-The engine loads the recipient's `get_public_key` and asks the platform host
-for the protected mnemonic with reason `"encryptComment"`. Put `body` into the
-same immutable intent passed to `previewSend` and `send`.
+Supplying `recipientPublicKey` skips the recipient's `get_public_key` lookup,
+including for an uninitialized wallet. Omit it or pass `null` to use the lookup.
+The caller must verify that the supplied key corresponds to the recipient
+address; the engine does not verify this association. The engine asks the
+platform host for the protected mnemonic with reason `"encryptComment"`. Put
+`body` into the same immutable intent passed to `previewSend` and `send`.
 
 Encrypted activity exposes `encryptedComment` instead of `comment`. Decryption
 is explicit, so refresh never opens an authentication prompt:

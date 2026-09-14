@@ -78,10 +78,12 @@ export interface ActivityItem {
   readonly counterparty?: string
 }
 
-/** Builds an encrypted-comment BOC after provider lookup and key authorization. */
+/** Builds an encrypted-comment BOC after authorizing access to the sender's key. */
 export interface CreateEncryptedCommentRequest {
   readonly recipient: string
   readonly comment: string
+  /** Optional 32-byte Ed25519 key; skips provider lookup. The caller must verify it matches the recipient. */
+  readonly recipientPublicKey?: number[] | null
 }
 
 /** Decrypts an encrypted-comment BOC from the specified sender. */
