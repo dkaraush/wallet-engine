@@ -38,6 +38,10 @@ pub(crate) enum EncryptedCommentError {
     WalletIdentityMismatch,
     #[error("the peer Ed25519 public key is invalid")]
     InvalidPeerPublicKey,
+    #[error(
+        "the recipient public key does not match a supported wallet address with default parameters"
+    )]
+    RecipientPublicKeyMismatch,
     #[error("secure random generation failed")]
     RandomGeneration,
     #[error("the encrypted comment body is malformed")]

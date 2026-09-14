@@ -82,7 +82,10 @@ export interface ActivityItem {
 export interface CreateEncryptedCommentRequest {
   readonly recipient: string
   readonly comment: string
-  /** Optional 32-byte Ed25519 key; skips provider lookup. The caller must verify it matches the recipient. */
+  /**
+   * Optional 32-byte Ed25519 key; skips provider lookup. The engine verifies that
+   * it derives the recipient address using supported default wallet parameters.
+   */
   readonly recipientPublicKey?: number[] | null
 }
 

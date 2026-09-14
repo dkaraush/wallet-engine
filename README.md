@@ -944,14 +944,21 @@ For an encrypted transfer comment, call `createEncryptedComment` before
 preview. The engine uses the optional 32-byte Ed25519 `recipientPublicKey`, or
 calls `get_public_key` on the recipient wallet when it is omitted or `null`.
 Supplying the key skips that lookup and supports uninitialized wallets. The
-caller must verify that the supplied key corresponds to the recipient address;
-the engine does not verify this association. It authorizes
+engine locally reconstructs supported default wallet `StateInit` values from
+the supplied key and requires one to derive the recipient address. A mismatch
+is rejected before any HTTP request or protected-secret access. It authorizes
 the protected sender mnemonic through the platform host, applies the TON
 Ed25519/X25519, HMAC-SHA512, AES-256-CBC, and snake-cell format, and returns a
 complete BOC. Put that BOC in `SendMessageBody.rawPayload`, then preview and
 send the same immutable intent. Plaintext is limited to 960 UTF-8 bytes.
 See the [TON encrypted-comments
 format](https://docs.ton.org/llms/contracts/standard/wallets/interact/content.md#encrypted-comments).
+
+Supplied-key verification supports Wallet V1/V2, V3/V4 with default wallet IDs
+(including workchain-aware defaults), V5R1 with a network- and workchain-aware
+default ID, and the engine's Wallet rev00 with its default ID in workchain 0.
+Custom wallet IDs and unsupported initial parameters are rejected. This local
+verification applies only when `recipientPublicKey` is supplied.
 
 `SendAmount.all` must be the only message in its batch. Wallet V5 applies the
 batch in order.

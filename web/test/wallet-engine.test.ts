@@ -604,13 +604,12 @@ describe("high-level WASM API", () => {
       clients.push(client)
 
       const body = await client.createEncryptedComment({
-        recipient: `0:${"22".repeat(32)}`,
+        recipient: keySource === "supplied" ? created.descriptor.address : `0:${"22".repeat(32)}`,
         comment: "private hello",
         ...(keySource === "omitted"
           ? {}
           : {
-              recipientPublicKey:
-                keySource === "null" ? null : Array.from(Buffer.from(peerPublicKey, "hex")),
+              recipientPublicKey: keySource === "null" ? null : created.descriptor.publicKey,
             }),
       })
       const comment = await client.decryptComment({
@@ -623,6 +622,47 @@ describe("high-level WASM API", () => {
       expect(secrets.reasons).toEqual(["encryptComment", "decryptComment"])
     },
   )
+
+  test("rejects a mismatched encrypted-comment key before HTTP or secret access", async () => {
+    const secrets = new RecordingSecrets()
+    const encryptedPlatform = new BrowserPlatformHost({
+      secrets,
+      journal: new MemoryJournal(),
+    })
+    const lifecycle = await WalletLifecycle.create(encryptedPlatform)
+    lifecycles.push(lifecycle)
+    const created = await lifecycle.createWallet({
+      recordId: "encrypted-comment-mismatched-key",
+      network: "testnet",
+    })
+    let fetchCount = 0
+    const client = await WalletClient.create(
+      {
+        ...walletConfig(created.descriptor),
+        localSecretRef: created.descriptor.secretRef,
+      },
+      {
+        platformHost: encryptedPlatform,
+        fetch: mockFetch(async () => {
+          fetchCount += 1
+          return new Response()
+        }),
+      },
+    )
+    clients.push(client)
+
+    await expect(
+      client.createEncryptedComment({
+        recipient: created.descriptor.address,
+        comment: "private hello",
+        recipientPublicKey: Array.from(
+          Buffer.from("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c", "hex"),
+        ),
+      }),
+    ).rejects.toBeInstanceOf(Error)
+    expect(fetchCount).toBe(0)
+    expect(secrets.reasons).toEqual([])
+  })
 })
 
 class RecordingSecrets extends MemorySecrets {

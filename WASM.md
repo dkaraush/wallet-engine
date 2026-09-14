@@ -286,10 +286,12 @@ const body = {kind: "rawPayload" as const, boc}
 
 Supplying `recipientPublicKey` skips the recipient's `get_public_key` lookup,
 including for an uninitialized wallet. Omit it or pass `null` to use the lookup.
-The caller must verify that the supplied key corresponds to the recipient
-address; the engine does not verify this association. The engine asks the
-platform host for the protected mnemonic with reason `"encryptComment"`. Put
-`body` into the same immutable intent passed to `previewSend` and `send`.
+The engine verifies locally that the supplied key derives the recipient address
+using [supported default wallet parameters](README.md#sending-gram).
+Unmatched keys or unsupported parameters are rejected before any HTTP request
+or protected-secret access. The engine asks the platform host for the protected
+mnemonic with reason `"encryptComment"`. Put `body` into the same immutable
+intent passed to `previewSend` and `send`.
 
 Encrypted activity exposes `encryptedComment` instead of `comment`. Decryption
 is explicit, so refresh never opens an authentication prompt:

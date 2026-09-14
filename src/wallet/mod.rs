@@ -9,6 +9,7 @@ pub(crate) mod key_rotation;
 pub(crate) mod mnemonic;
 mod mnemonic_scheme;
 pub(crate) mod nft_transfer;
+pub(crate) mod recipient_public_key;
 pub(crate) mod send;
 pub(crate) mod slip_0010;
 pub(crate) mod transfer;

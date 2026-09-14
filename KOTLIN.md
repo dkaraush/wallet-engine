@@ -177,9 +177,11 @@ one transaction produces multiple activity rows, so do not sum it per row.
 Call `WalletClient.createEncryptedComment` with the recipient and UTF-8 text.
 Optionally set `CreateEncryptedCommentRequest.recipientPublicKey` to the
 recipient's 32-byte Ed25519 key to skip the `get_public_key` lookup, including
-for an uninitialized wallet. The caller must verify that this key corresponds
-to the recipient address; the engine does not verify this association. The
-default `null` uses the lookup. The engine requests the protected mnemonic with
+for an uninitialized wallet. The engine verifies that the supplied key derives
+the recipient address using supported default wallet parameters; see
+[supplied-key verification](README.md#sending-gram). A mismatch is rejected
+before any HTTP request or protected-secret access. The default `null` uses the
+lookup. The engine requests the protected mnemonic with
 `SecretAccessReason.ENCRYPT_COMMENT`, and returns a BOC. Use that BOC as a
 `SendMessageBody.RawPayload`, then preview and send the same intent.
 
