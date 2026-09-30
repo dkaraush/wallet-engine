@@ -18,6 +18,7 @@ const VERSION_FILES: &[&str] = &[
     "Cargo.lock",
     "bindgen/wasm/Cargo.toml",
     "bindgen/wasm/Cargo.lock",
+    "examples/tui/Cargo.lock",
     "web/package.json",
 ];
 const REQUIRED_CHECKS: &[&str] = &[
@@ -181,6 +182,12 @@ fn update_lockfiles(root: &Path) -> Result<()> {
         "update",
         "--manifest-path",
         "bindgen/wasm/Cargo.toml",
+        "--workspace",
+    ]))?;
+    run_command(Command::new("cargo").current_dir(root).args([
+        "update",
+        "--manifest-path",
+        "examples/tui/Cargo.toml",
         "--workspace",
     ]))
 }
