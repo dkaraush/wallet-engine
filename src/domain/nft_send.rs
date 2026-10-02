@@ -68,6 +68,16 @@ pub struct NftTransferPreviewRequest {
     pub intent: NftTransferIntent,
 }
 
+/// Requests signed NFT transfer delivery forms without submitting either one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareNftTransferRequest {
+    /// Correlation identifier, shared with the preview for a stable TEP-62 query ID.
+    pub operation_id: NonEmptyString,
+    /// Immutable NFT transfer choices.
+    pub intent: NftTransferIntent,
+}
+
 /// Requests one owner-signed TEP-62 NFT transfer.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]

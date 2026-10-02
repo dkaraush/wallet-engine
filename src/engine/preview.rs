@@ -29,6 +29,28 @@ impl WalletClient {
         &self,
         request: SendPreviewRequest,
     ) -> Result<SendPreview, WalletClientError> {
+        self.preview_send_or_key_rotation(Some(request)).await
+    }
+
+    /// Emulates external key rotation using public state and zero signatures.
+    /// Never unlocks a secret, generates a replacement phrase, or submits a BOC.
+    pub async fn preview_key_rotation(&self) -> Result<SendPreview, WalletClientError> {
+        self.preview_send_or_key_rotation(None).await
+    }
+}
+
+impl WalletClient {
+    async fn preview_send_or_key_rotation(
+        &self,
+        request: Option<SendPreviewRequest>,
+    ) -> Result<SendPreview, WalletClientError> {
+        let key_rotation = request.is_none();
+        let request = request.unwrap_or_else(|| SendPreviewRequest {
+            intent: crate::SendIntent {
+                expiration: crate::SendExpiration::EngineDefault,
+                messages: Vec::new(),
+            },
+        });
         let (
             generation,
             config,
@@ -89,10 +111,13 @@ impl WalletClient {
             })?;
 
         let available = account.balance_nanograms.clone();
-        let requested = request
-            .intent
-            .exact_value_total()
-            .map_err(|_| self.preview_error(generation, WalletClientError::InvalidSendRequest))?;
+        let requested = if key_rotation {
+            Some(crate::UnsignedDecimalString::from(0_u64))
+        } else {
+            request.intent.exact_value_total().map_err(|_| {
+                self.preview_error(generation, WalletClientError::InvalidSendRequest)
+            })?
+        };
 
         if let Some(nanograms) = &requested
             && nanograms > &available
@@ -148,14 +173,27 @@ impl WalletClient {
             seqno,
         };
 
-        let boc = prepare_transfer_emulation(
-            &expected_source,
-            &config.public_key,
-            config.network,
-            &request,
-            &fresh,
-            valid_until,
-        )
+        let boc = if key_rotation {
+            crate::wallet::key_rotation::prepare_key_rotation_emulation(
+                &expected_source,
+                &config.public_key,
+                config.network,
+                fresh.seqno,
+                fresh.needs_state_init(),
+                valid_until,
+            )
+            .map_err(|error| error.to_string())
+        } else {
+            prepare_transfer_emulation(
+                &expected_source,
+                &config.public_key,
+                config.network,
+                &request,
+                &fresh,
+                valid_until,
+            )
+            .map_err(|error| error.to_string())
+        }
         .map_err(|error| {
             self.preview_error(
                 generation,
@@ -205,7 +243,10 @@ impl WalletClient {
         self.finish_preview(generation)?;
         Ok(preview)
     }
+}
 
+#[uniffi::export]
+impl WalletClient {
     /// Emulates an already signed external-message BOC without submitting it.
     ///
     /// The request is validated against the configured source and fresh wallet

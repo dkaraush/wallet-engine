@@ -16,9 +16,8 @@ pub struct CreateEncryptedCommentRequest {
     pub comment: String,
     /// Optional 32-byte Ed25519 public key used instead of an on-chain lookup.
     ///
-    /// The engine verifies this key against `recipient` by deriving supported
-    /// wallet addresses with default parameters. A mismatch or unsupported
-    /// wallet configuration is rejected before authorizing the sender's secret.
+    /// Used directly without deriving or checking the recipient address. The
+    /// caller must supply the key used by the recipient for comment decryption.
     #[serde(default)]
     #[uniffi(default = None)]
     pub recipient_public_key: Option<Vec<u8>>,
@@ -36,8 +35,8 @@ pub struct EncryptedCommentRecipientRequest {
     pub recipient: TonAddressString,
     /// Optional 32-byte Ed25519 public key used instead of an on-chain lookup.
     ///
-    /// It is verified against `recipient` exactly as
-    /// [`CreateEncryptedCommentRequest::recipient_public_key`] is.
+    /// The host authenticates it as described by
+    /// [`CreateEncryptedCommentRequest::recipient_public_key`].
     #[serde(default)]
     #[uniffi(default = None)]
     pub recipient_public_key: Option<Vec<u8>>,

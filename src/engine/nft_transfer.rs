@@ -3,8 +3,9 @@
 use crate::domain::bounded_diagnostic;
 use crate::wallet::nft_transfer::canonicalize_nft_transfer;
 use crate::{
-    NftItem, NftTransferPreviewRequest, NftTransferRequest, SendPreview, SendPreviewRequest,
-    SendRequest, SendResult, TonAddressString, WalletClientError,
+    NftItem, NftTransferPreviewRequest, NftTransferRequest, PrepareNftTransferRequest,
+    PrepareTransferRequest, PreparedTransfer, SendPreview, SendPreviewRequest, SendRequest,
+    SendResult, TonAddressString, WalletClientError,
 };
 
 use super::WalletClient;
@@ -13,6 +14,30 @@ use super::state::ensure_running;
 
 #[uniffi::export]
 impl WalletClient {
+    /// Validates ownership and emulation, then signs external and internal delivery
+    /// alternatives without broadcasting or writing the send journal.
+    pub async fn prepare_nft_transfer(
+        &self,
+        request: PrepareNftTransferRequest,
+    ) -> Result<PreparedTransfer, WalletClientError> {
+        let _preview = self
+            .preview_nft_transfer(NftTransferPreviewRequest {
+                operation_id: request.operation_id.clone(),
+                intent: request.intent.clone(),
+            })
+            .await?;
+        let source = self.nft_transfer_source()?;
+        let canonical = canonicalize_nft_transfer(&request.operation_id, &source, &request.intent)
+            .map_err(|error| {
+                nft_unavailable(format!("failed to build TEP-62 transfer: {error}"))
+            })?;
+        self.prepare_transfer(PrepareTransferRequest {
+            operation_id: request.operation_id,
+            intent: canonical.intent,
+        })
+        .await
+    }
+
     /// Validates current ownership and emulates one typed TEP-62 NFT transfer.
     ///
     /// Reuse this request's operation ID for [`Self::send_nft_transfer`] after

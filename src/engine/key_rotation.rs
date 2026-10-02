@@ -16,7 +16,8 @@ use super::state::{OperationFamily, ensure_running};
 
 #[uniffi::export]
 impl WalletClient {
-    /// Generates a new signing half and a signed Wallet rev00 key-change message.
+    /// Generates one new signing half and both signed Wallet rev00 delivery forms.
+    /// `signed_boc` aliases the form selected by `request.message_kind`.
     ///
     /// The client first fetches fresh account state through its configured
     /// provider. Active wallets use the on-chain `seqno` getter, while an
@@ -182,6 +183,8 @@ impl WalletClient {
             },
             new_public_key: prepared.new_public_key.to_vec(),
             signed_boc: prepared.signed_boc,
+            external_boc: prepared.external_boc,
+            internal_boc: prepared.internal_boc,
             seqno,
             valid_until: request.valid_until,
             message_kind: request.message_kind,

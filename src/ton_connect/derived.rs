@@ -245,6 +245,18 @@ impl TonConnectDerivedSession {
     reason = "UniFFI exports owned records, byte buffers, and strings at the foreign-language boundary"
 )]
 impl TonConnectDerivedSession {
+    /// Opens an opaque MTProto envelope for hosts that own RPC decoding.
+    /// In particular, Gram Wallet also supports relayed `signMessage`.
+    pub fn decrypt_envelope(&self, body: Vec<u8>) -> Result<Vec<u8>, TonConnectSessionError> {
+        self.crypto.decrypt(self.peer, &body).map_err(session_error)
+    }
+
+    /// Seals a host-validated protocol envelope without exporting session keys.
+    pub fn encrypt_envelope(&self, body: Vec<u8>) -> Result<Vec<u8>, TonConnectSessionError> {
+        let body = Zeroizing::new(body);
+        self.crypto.encrypt(self.peer, &body).map_err(session_error)
+    }
+
     /// Returns the session public key `W` as 64 lowercase hex characters.
     #[must_use]
     pub fn public_key_hex(&self) -> String {

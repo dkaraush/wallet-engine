@@ -48,6 +48,8 @@ pub(crate) struct PreparedKeyRotationMaterial {
     pub(crate) replacement_mnemonic: SensitiveMnemonic,
     pub(crate) new_public_key: [u8; 32],
     pub(crate) signed_boc: Boc,
+    pub(crate) external_boc: Boc,
+    pub(crate) internal_boc: Boc,
 }
 
 pub(crate) fn prepare_key_rotation(
@@ -143,24 +145,34 @@ fn prepare_with_new_half(
             .map_err(|_| KeyRotationError::Preparation)?
             .as_slice(),
     );
-    let request = build_change_public_key_request(
-        message_kind,
-        wallet_id,
-        valid_until,
-        seqno,
-        new_public_key,
-        proof_signature.to_bytes(),
-        encrypt_old_private_key(current_key, new_key),
-    )
-    .map_err(|_| KeyRotationError::Preparation)?;
-    let signed_request = sign_cell(current_key, &request)?;
-    let message = wrap_signed_request(wallet_address, message_kind, signed_request, state_init)?;
-    let signed_boc = Boc::try_from(
-        message
-            .to_boc()
-            .map_err(|_| KeyRotationError::Preparation)?,
-    )
-    .map_err(|_| KeyRotationError::Preparation)?;
+    // Generate the replacement only once. The opcodes differ, so each delivery
+    // form needs its own current-key signature over the same replacement key.
+    let build = |kind, init| {
+        let request = build_change_public_key_request(
+            kind,
+            wallet_id,
+            valid_until,
+            seqno,
+            new_public_key,
+            proof_signature.to_bytes(),
+            encrypt_old_private_key(current_key, new_key),
+        )
+        .map_err(|_| KeyRotationError::Preparation)?;
+        let signed_request = sign_cell(current_key, &request)?;
+        let message = wrap_signed_request(wallet_address, kind, signed_request, init)?;
+        Boc::try_from(
+            message
+                .to_boc()
+                .map_err(|_| KeyRotationError::Preparation)?,
+        )
+        .map_err(|_| KeyRotationError::Preparation)
+    };
+    let external_boc = build(KeyRotationMessageKind::External, state_init.clone())?;
+    let internal_boc = build(KeyRotationMessageKind::Internal, state_init)?;
+    let signed_boc = match message_kind {
+        KeyRotationMessageKind::External => external_boc.clone(),
+        KeyRotationMessageKind::Internal => internal_boc.clone(),
+    };
 
     let mut replacement_phrase = Zeroizing::new(String::new());
     replacement_phrase.push_str(&current.anchor().to_phrase());
@@ -174,7 +186,69 @@ fn prepare_with_new_half(
         replacement_mnemonic,
         new_public_key,
         signed_boc,
+        external_boc,
+        internal_boc,
     })
+}
+
+/// Constructs an external rotation preview using public state only. Both the
+/// owner signature and the new-key proof are zero placeholders; this BOC must
+/// never authorize a real rotation, even if the emulation provider broadcasts it.
+pub(crate) fn prepare_key_rotation_emulation(
+    source: &TonAddressString,
+    anchor_public_key: &[u8],
+    network: Network,
+    seqno: u32,
+    needs_state_init: bool,
+    valid_until: u64,
+) -> Result<Boc, KeyRotationError> {
+    let valid_until =
+        u32::try_from(valid_until).map_err(|_| KeyRotationError::ExpirationOutOfRange)?;
+    let wallet_id = match network {
+        Network::Mainnet => ton::ton_wallet::WALLET_SUBWALLET_ID_DEFAULT,
+        Network::Testnet => ton::ton_wallet::WALLET_SUBWALLET_ID_DEFAULT_TESTNET,
+    };
+    // Encoded Ed25519 base point: a valid public key unrelated to the wallet.
+    let mut placeholder_key = [0x66; 32];
+    placeholder_key[0] = 0x58;
+    let request = build_change_public_key_request(
+        KeyRotationMessageKind::External,
+        wallet_id,
+        valid_until,
+        seqno,
+        placeholder_key,
+        [0; 64],
+        [0; 32],
+    )
+    .map_err(|_| KeyRotationError::Preparation)?;
+    let mut body = TonCell::builder();
+    body.write_bits([0; 64], SIGNATURE_BITS)
+        .map_err(|_| KeyRotationError::Preparation)?;
+    body.write_cell(&request)
+        .map_err(|_| KeyRotationError::Preparation)?;
+    let body = body.build().map_err(|_| KeyRotationError::Preparation)?;
+    let init = if needs_state_init {
+        let (address, init) = derive_wallet_public_state(anchor_public_key, network)
+            .map_err(|_| KeyRotationError::Preparation)?;
+        if &address != source.as_address() {
+            return Err(KeyRotationError::WalletIdentityMismatch);
+        }
+        Some(init)
+    } else {
+        None
+    };
+    let message = wrap_signed_request(
+        source.as_address(),
+        KeyRotationMessageKind::External,
+        body,
+        init,
+    )?;
+    Boc::try_from(
+        message
+            .to_boc()
+            .map_err(|_| KeyRotationError::Preparation)?,
+    )
+    .map_err(|_| KeyRotationError::Preparation)
 }
 
 fn build_rotation_proof(wallet_address: &TonAddress) -> Result<TonCell, TonCoreError> {
@@ -592,6 +666,149 @@ mod tests {
             ),
             Err(KeyRotationError::ExpirationOutOfRange)
         ));
+    }
+
+    #[test]
+    fn paired_rotation_uses_one_replacement_and_verifiable_channel_signatures() {
+        for phrase in [CURRENT_PHRASE, ROTATED_PHRASE] {
+            let current = SensitiveMnemonic::from_bytes(phrase.as_bytes().to_vec()).unwrap();
+            let wallet = derive_wallet(phrase, Network::Testnet).unwrap();
+            let source = TonAddressString::from_address(&wallet.address, Network::Testnet);
+            let material = prepare_key_rotation(
+                &current,
+                Network::Testnet,
+                &source,
+                SEQNO,
+                false,
+                u64::from(VALID_UNTIL),
+                KeyRotationMessageKind::External,
+            )
+            .unwrap();
+            let replacement =
+                RotationMnemonic::parse(material.replacement_mnemonic.as_str().unwrap()).unwrap();
+            let keys = derive_rotation_keys(&replacement);
+            assert_eq!(
+                keys.signing.verifying_key().to_bytes(),
+                material.new_public_key
+            );
+            let current_keys = derive_rotation_keys(&RotationMnemonic::parse(phrase).unwrap());
+            assert_eq!(
+                keys.anchor.verifying_key(),
+                current_keys.anchor.verifying_key()
+            );
+            assert_ne!(
+                keys.signing.verifying_key(),
+                current_keys.signing.verifying_key()
+            );
+            assert_eq!(material.signed_boc, material.external_boc);
+            let proof = build_rotation_proof(&wallet.address).unwrap();
+            let proof_signature = keys
+                .signing
+                .sign(proof.cell_hash().unwrap().as_slice())
+                .to_bytes();
+            for (kind, boc, opcode) in [
+                (
+                    KeyRotationMessageKind::External,
+                    &material.external_boc,
+                    CHANGE_PUBLIC_KEY_EXTERNAL_OPCODE,
+                ),
+                (
+                    KeyRotationMessageKind::Internal,
+                    &material.internal_boc,
+                    CHANGE_PUBLIC_KEY_INTERNAL_OPCODE,
+                ),
+            ] {
+                let message = Msg::<TonCell>::from_boc(boc.as_bytes().to_vec()).unwrap();
+                assert!(matches!(
+                    (&message.info, kind),
+                    (CommonMsgInfo::ExtIn(_), KeyRotationMessageKind::External)
+                        | (CommonMsgInfo::Int(_), KeyRotationMessageKind::Internal)
+                ));
+                let request = build_change_public_key_request(
+                    kind,
+                    wallet.wallet_id,
+                    VALID_UNTIL,
+                    SEQNO,
+                    material.new_public_key,
+                    proof_signature,
+                    encrypt_old_private_key(&current_keys.signing, &keys.signing),
+                )
+                .unwrap();
+                assert_signed_request(
+                    &message.body.value,
+                    &request,
+                    current_keys.signing.verifying_key().to_bytes(),
+                    opcode,
+                    material.new_public_key,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rotation_preview_has_no_valid_owner_or_replacement_signature() {
+        let wallet = derive_wallet(CURRENT_PHRASE, Network::Testnet).unwrap();
+        let keys = derive_rotation_keys(&RotationMnemonic::parse(CURRENT_PHRASE).unwrap());
+        let source = TonAddressString::from_address(&wallet.address, Network::Testnet);
+        for deploy in [false, true] {
+            let boc = prepare_key_rotation_emulation(
+                &source,
+                &keys.anchor.verifying_key().to_bytes(),
+                Network::Testnet,
+                SEQNO,
+                deploy,
+                u64::from(VALID_UNTIL),
+            )
+            .unwrap();
+            let message = Msg::<TonCell>::from_boc(boc.as_bytes().to_vec()).unwrap();
+            assert!(matches!(message.info, CommonMsgInfo::ExtIn(_)));
+            assert_eq!(message.init.is_some(), deploy);
+            let mut parser = message.body.value.parser();
+            let owner_signature = parser.read_bits(SIGNATURE_BITS).unwrap();
+            assert_eq!(owner_signature, [0; 64]);
+            assert_eq!(
+                parser.read_num::<u32>(32).unwrap(),
+                CHANGE_PUBLIC_KEY_EXTERNAL_OPCODE
+            );
+            let _ = parser.read_num::<u32>(32).unwrap();
+            assert_eq!(parser.read_num::<u32>(32).unwrap(), VALID_UNTIL);
+            assert_eq!(parser.read_num::<u32>(32).unwrap(), SEQNO);
+            let key: [u8; 32] = parser.read_bits(256).unwrap().try_into().unwrap();
+            let proof_cell = parser.read_next_ref().unwrap();
+            let proof_signature = proof_cell.parser().read_bits(SIGNATURE_BITS).unwrap();
+            assert_eq!(proof_signature, [0; 64]);
+            assert_eq!(read_encrypted_old_private_key(&mut parser), [0; 32]);
+            parser.ensure_empty().unwrap();
+            let proof = build_rotation_proof(&wallet.address).unwrap();
+            assert!(
+                VerifyingKey::from_bytes(&key)
+                    .unwrap()
+                    .verify_strict(
+                        proof.cell_hash().unwrap().as_slice(),
+                        &Signature::from_slice(&proof_signature).unwrap()
+                    )
+                    .is_err()
+            );
+            let request = build_change_public_key_request(
+                KeyRotationMessageKind::External,
+                wallet.wallet_id,
+                VALID_UNTIL,
+                SEQNO,
+                key,
+                [0; 64],
+                [0; 32],
+            )
+            .unwrap();
+            assert!(
+                keys.signing
+                    .verifying_key()
+                    .verify_strict(
+                        request.cell_hash().unwrap().as_slice(),
+                        &Signature::from_slice(&owner_signature).unwrap()
+                    )
+                    .is_err()
+            );
+        }
     }
 
     fn deterministic_material(

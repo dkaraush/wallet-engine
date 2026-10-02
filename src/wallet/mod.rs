@@ -10,7 +10,6 @@ pub(crate) mod key_rotation;
 pub(crate) mod mnemonic;
 mod mnemonic_scheme;
 pub(crate) mod nft_transfer;
-pub(crate) mod recipient_public_key;
 pub(crate) mod send;
 pub(crate) mod slip_0010;
 pub(crate) mod transfer;
@@ -217,6 +216,10 @@ pub struct PreparedKeyRotation {
     /// Its `ChangePublicKey` request holds two references: the new key's
     /// wallet-address proof signature and the encrypted old private key.
     pub signed_boc: Boc,
+    /// External delivery form for the same replacement key, sequence and expiration.
+    pub external_boc: Boc,
+    /// Internal alternative; submit only one of the two delivery forms.
+    pub internal_boc: Boc,
     /// Sequence number covered by the signed request.
     pub seqno: u32,
     /// Unix expiration timestamp covered by the signed request.
